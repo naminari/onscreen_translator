@@ -1,0 +1,10 @@
+hello|привет
+world|мир
+good|хороший
+bad|плохой
+translate|переводить
+screen|экран
+application|приложение
+offline|офлайн
+privacy|приватность
+data|данные
