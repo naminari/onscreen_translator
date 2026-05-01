@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"image"
 	"syscall"
 	"time"
@@ -18,7 +19,6 @@ var (
 	procShowWindow                 = user32.NewProc("ShowWindow")
 	procUpdateWindow               = user32.NewProc("UpdateWindow")
 	procGetClientRect              = user32.NewProc("GetClientRect")
-	procInvalidateRect             = user32.NewProc("InvalidateRect")
 	procRegisterClassExW           = user32.NewProc("RegisterClassExW")
 	procDefWindowProcW             = user32.NewProc("DefWindowProcW")
 	procBeginPaint                 = user32.NewProc("BeginPaint")
@@ -33,12 +33,12 @@ var (
 	procReleaseCapture             = user32.NewProc("ReleaseCapture")
 	procIsWindow                   = user32.NewProc("IsWindow")
 	procSetWindowPos               = user32.NewProc("SetWindowPos")
+	procGetDC                      = user32.NewProc("GetDC")
+	procReleaseDC                  = user32.NewProc("ReleaseDC")
+	procInvertRect                 = user32.NewProc("InvertRect")
 
-	procCreateSolidBrush    = gdi32.NewProc("CreateSolidBrush")
-	procDeleteObject        = gdi32.NewProc("DeleteObject")
-	procDrawTextW           = user32.NewProc("DrawTextW")
-	procSelectObject        = gdi32.NewProc("SelectObject")
-	procCreateFontIndirectW = gdi32.NewProc("CreateFontIndirectW")
+	procCreateSolidBrush = gdi32.NewProc("CreateSolidBrush")
+	procDeleteObject     = gdi32.NewProc("DeleteObject")
 )
 
 const (
@@ -46,7 +46,6 @@ const (
 	WS_EX_TOPMOST = 0x8
 	WS_POPUP      = 0x80000000
 	WS_VISIBLE    = 0x10000000
-	WS_BORDER     = 0x00800000
 	LWA_ALPHA     = 0x2
 
 	SM_XVIRTUALSCREEN  = 76
@@ -66,12 +65,6 @@ const (
 	WM_DESTROY       = 0x0002
 	WM_NCHITTEST     = 0x0084
 	WM_MOUSEACTIVATE = 0x0021
-	WM_KEYDOWN       = 0x0100
-	VK_ESCAPE        = 0x1B
-
-	DT_CENTER    = 0x00000001
-	DT_VCENTER   = 0x00000004
-	DT_WORDBREAK = 0x00000010
 )
 
 var (
@@ -80,11 +73,10 @@ var (
 	drawing           bool
 	selectionRect     image.Rectangle
 	captureModeActive bool
-	resultText        string
+	prevRect          image.Rectangle
 )
 
 var className = syscall.StringToUTF16Ptr("OverlayWindowClass")
-var resultClassName = syscall.StringToUTF16Ptr("ResultWindowClass")
 
 func getModuleHandle() uintptr {
 	ret, _, _ := kernel32.NewProc("GetModuleHandleW").Call(0)
@@ -115,6 +107,18 @@ func init() {
 	procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
 }
 
+func invertRect(hdc uintptr, r image.Rectangle) {
+	rect := struct {
+		Left, Top, Right, Bottom int32
+	}{
+		Left:   int32(r.Min.X),
+		Top:    int32(r.Min.Y),
+		Right:  int32(r.Max.X),
+		Bottom: int32(r.Max.Y),
+	}
+	procInvertRect.Call(hdc, uintptr(unsafe.Pointer(&rect)))
+}
+
 func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	switch msg {
 	case WM_NCHITTEST:
@@ -123,19 +127,25 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		return 3
 	case WM_LBUTTONDOWN:
 		drawing = true
-		rawX := int(int16(lParam & 0xFFFF))
-		rawY := int(int16(lParam >> 16))
-		offX, _, _ := procGetSystemMetrics.Call(SM_XVIRTUALSCREEN)
-		offY, _, _ := procGetSystemMetrics.Call(SM_YVIRTUALSCREEN)
-		startX = rawX + int(offX)
-		startY = rawY + int(offY)
-		selectionRect = image.Rect(startX, startY, startX, startY)
+		startX = int(int16(lParam & 0xFFFF))
+		startY = int(int16(lParam >> 16))
+		prevRect = image.Rect(0, 0, 0, 0)
 		return 0
 	case WM_MOUSEMOVE:
 		if drawing {
-			x := int(lParam & 0xFFFF)
-			y := int(lParam >> 16)
-			selectionRect = image.Rect(startX, startY, x, y)
+			x := int(int16(lParam & 0xFFFF))
+			y := int(int16(lParam >> 16))
+			newRect := image.Rect(startX, startY, x, y)
+			normalized := normalizeRect(newRect)
+			hdc, _, _ := procGetDC.Call(hwnd)
+			if hdc != 0 {
+				if prevRect.Dx() != 0 && prevRect.Dy() != 0 {
+					invertRect(hdc, prevRect)
+				}
+				invertRect(hdc, normalized)
+				procReleaseDC.Call(hwnd, hdc)
+				prevRect = normalized
+			}
 		}
 		return 0
 	case WM_LBUTTONUP:
@@ -143,20 +153,32 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			return 0
 		}
 		drawing = false
-		rawX := int(int16(lParam & 0xFFFF))
-		rawY := int(int16(lParam >> 16))
+		if prevRect.Dx() != 0 && prevRect.Dy() != 0 {
+			hdc, _, _ := procGetDC.Call(hwnd)
+			if hdc != 0 {
+				invertRect(hdc, prevRect)
+				procReleaseDC.Call(hwnd, hdc)
+			}
+			prevRect = image.Rect(0, 0, 0, 0)
+		}
 		offX, _, _ := procGetSystemMetrics.Call(SM_XVIRTUALSCREEN)
 		offY, _, _ := procGetSystemMetrics.Call(SM_YVIRTUALSCREEN)
+		rawX := int(int16(lParam & 0xFFFF))
+		rawY := int(int16(lParam >> 16))
 		endX := rawX + int(offX)
 		endY := rawY + int(offY)
-		selectionRect.Max = image.Point{endX, endY}
-		finalRect := normalizeRect(selectionRect)
-		if finalRect.Dx() < 10 || finalRect.Dy() < 10 {
+		absRect := image.Rect(
+			startX+int(offX), startY+int(offY),
+			endX, endY,
+		)
+		absRect = normalizeRect(absRect)
+		if absRect.Dx() < 10 || absRect.Dy() < 10 {
 			procDestroyWindow.Call(hwnd)
 			return 0
 		}
+		selectionRect = absRect
 		procDestroyWindow.Call(hwnd)
-		go processSelection(finalRect)
+		go processSelection(selectionRect)
 		return 0
 	case WM_PAINT:
 		var ps struct {
@@ -223,165 +245,28 @@ func normalizeRect(r image.Rectangle) image.Rectangle {
 }
 
 func processSelection(rect image.Rectangle) {
+	fmt.Printf("\n=== Выделена область: (%d,%d) - (%d,%d) ===\n", rect.Min.X, rect.Min.Y, rect.Max.X, rect.Max.Y)
 	text, err := captureAndOCR(rect.Min.X, rect.Min.Y, rect.Dx(), rect.Dy())
 	if err != nil {
+		fmt.Printf("Ошибка OCR: %v\n", err)
 		activateCaptureMode()
 		return
 	}
+	fmt.Println("=== Распознанный текст ===")
+	fmt.Println(text)
+
 	translated, err := translateNMT(text)
 	if err != nil {
+		fmt.Printf("Ошибка перевода: %v\n", err)
 		activateCaptureMode()
 		return
 	}
-	done := make(chan struct{})
-	// Позиционируем окно результата рядом с выделенной областью, не выходя за экран
-	x, y := rect.Max.X+10, rect.Max.Y+10
-	sw, _, _ := procGetSystemMetrics.Call(SM_CXVIRTUALSCREEN)
-	sh, _, _ := procGetSystemMetrics.Call(SM_CYVIRTUALSCREEN)
-	if x+400 > int(sw) {
-		x = rect.Min.X - 410
-	}
-	if y+200 > int(sh) {
-		y = rect.Min.Y - 210
-	}
-	if x < 0 {
-		x = 0
-	}
-	if y < 0 {
-		y = 0
-	}
-	showResultOverlay(translated, x, y, done)
-	<-done
+	fmt.Println("=== Перевод ===")
+	fmt.Println(translated)
+
+	fmt.Println("(Программа будет ждать 3 секунды и снова активирует выделение)")
+	time.Sleep(3 * time.Second)
 	activateCaptureMode()
-}
-
-func initResultClass() {
-	type WNDCLASSEX struct {
-		cbSize        uint32
-		style         uint32
-		lpfnWndProc   uintptr
-		cbClsExtra    int32
-		cbWndExtra    int32
-		hInstance     uintptr
-		hIcon         uintptr
-		hCursor       uintptr
-		hbrBackground uintptr
-		lpszMenuName  *uint16
-		lpszClassName *uint16
-		hIconSm       uintptr
-	}
-	wc := WNDCLASSEX{
-		cbSize:        uint32(unsafe.Sizeof(WNDCLASSEX{})),
-		lpfnWndProc:   syscall.NewCallback(resultWndProc),
-		hInstance:     getModuleHandle(),
-		lpszClassName: resultClassName,
-	}
-	procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
-}
-
-func resultWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
-	switch msg {
-	case WM_PAINT:
-		var ps struct {
-			hdc         uintptr
-			fErase      int32
-			rcPaint     struct{ left, top, right, bottom int32 }
-			fRestore    int32
-			fIncUpdate  int32
-			rgbReserved [32]byte
-		}
-		hdc, _, _ := procBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
-		brush, _, _ := procCreateSolidBrush.Call(0x00000000)
-		var rect struct{ left, top, right, bottom int32 }
-		procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&rect)))
-		procFillRect.Call(hdc, uintptr(unsafe.Pointer(&rect)), brush)
-		procDeleteObject.Call(brush)
-
-		font, _, _ := procCreateFontIndirectW.Call(
-			uintptr(unsafe.Pointer(&struct {
-				lfHeight         int32
-				lfWidth          int32
-				lfEscapement     int32
-				lfOrientation    int32
-				lfWeight         int32
-				lfItalic         byte
-				lfUnderline      byte
-				lfStrikeOut      byte
-				lfCharSet        byte
-				lfOutPrecision   byte
-				lfClipPrecision  byte
-				lfQuality        byte
-				lfPitchAndFamily byte
-				lfFaceName       [32]uint16
-			}{
-				lfHeight:   -20,
-				lfWeight:   400,
-				lfFaceName: strToUTF16("Arial"),
-			})))
-		oldFont, _, _ := procSelectObject.Call(hdc, font)
-		user32.NewProc("SetTextColor").Call(hdc, 0x00FFFFFF)
-		user32.NewProc("SetBkMode").Call(hdc, 1)
-
-		textPtr := uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(resultText)))
-		procDrawTextW.Call(hdc, textPtr, uintptr(^uintptr(0)), uintptr(unsafe.Pointer(&rect)),
-			DT_CENTER|DT_VCENTER|DT_WORDBREAK)
-
-		procSelectObject.Call(hdc, oldFont)
-		procDeleteObject.Call(font)
-		procEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
-		return 0
-	case WM_KEYDOWN:
-		if wParam == VK_ESCAPE {
-			procDestroyWindow.Call(hwnd)
-		}
-		return 0
-	case WM_DESTROY:
-		return 0
-	default:
-		ret, _, _ := procDefWindowProcW.Call(hwnd, uintptr(msg), wParam, lParam)
-		return ret
-	}
-}
-
-func strToUTF16(s string) [32]uint16 {
-	var arr [32]uint16
-	for i, ch := range s {
-		if i >= 31 {
-			break
-		}
-		arr[i] = uint16(ch)
-	}
-	return arr
-}
-
-func showResultOverlay(text string, x, y int, done chan struct{}) {
-	initResultClass()
-	resultText = text
-	hwnd, _, _ := procCreateWindowExW.Call(
-		WS_EX_TOPMOST,
-		uintptr(unsafe.Pointer(resultClassName)),
-		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr("Translation"))),
-		WS_POPUP|WS_VISIBLE|WS_BORDER,
-		uintptr(x), uintptr(y), 400, 200,
-		0, 0, getModuleHandle(), 0,
-	)
-	if hwnd == 0 {
-		close(done)
-		return
-	}
-	go func() {
-		time.Sleep(7 * time.Second)
-		procDestroyWindow.Call(hwnd)
-	}()
-	go func() {
-		for {
-			time.Sleep(100 * time.Millisecond)
-			if isWindow, _, _ := procIsWindow.Call(hwnd); isWindow == 0 {
-				close(done)
-				return
-			}
-		}
-	}()
 }
 
 func activateCaptureMode() {
