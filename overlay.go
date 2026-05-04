@@ -252,7 +252,6 @@ func normalizeRect(r image.Rectangle) image.Rectangle {
 	return r
 }
 
-// processSelection – вызывается в горутине, после завершения перевода сбрасывает captureModeActive и уведомляет UI.
 func processSelection(rect image.Rectangle) {
 	fmt.Printf("\n=== Выделена область: (%d,%d) - (%d,%d) ===\n", rect.Min.X, rect.Min.Y, rect.Max.X, rect.Max.Y)
 	text, err := captureAndOCR(rect.Min.X, rect.Min.Y, rect.Dx(), rect.Dy())
@@ -273,7 +272,6 @@ func processSelection(rect image.Rectangle) {
 	fmt.Println("=== Перевод ===")
 	fmt.Println(translated)
 
-	// Показываем результат (можно добавить MessageBox, но пока просто вывод)
 	fmt.Println("Перевод завершён. Можно запускать новый захват.")
 	onSelectionDone(true)
 }

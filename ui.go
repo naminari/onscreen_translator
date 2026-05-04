@@ -54,13 +54,16 @@ const (
 )
 
 var (
-	mainHwnd       uintptr
-	settingsHwnd   uintptr
-	processing     bool
-	oldMainWndProc uintptr // для восстановления, если потребуется
+	mainHwnd           uintptr
+	settingsHwnd       uintptr
+	processing         bool
+	oldMainWndProc     uintptr // для восстановления, если потребуется
+	procSetBkMode      = gdi32.NewProc("SetBkMode")
+	procSetTextColor   = gdi32.NewProc("SetTextColor")
+	procGetWindowLongW = user32.NewProc("GetWindowLongW")
+	procSetWindowLongW = user32.NewProc("SetWindowLongW")
 )
 
-// LOWORD и HIWORD
 func LOWORD(dw uintptr) uint16 { return uint16(dw & 0xFFFF) }
 func HIWORD(dw uintptr) uint16 { return uint16((dw >> 16) & 0xFFFF) }
 
@@ -235,7 +238,6 @@ func startUI() {
 	}
 }
 
-// onSelectionDone вызывается по завершении обработки выделения
 func onSelectionDone(success bool) {
 	processing = false
 	fmt.Println("Захват завершён, кнопка разблокирована.")
@@ -517,10 +519,12 @@ func GetDlgItem(hwnd uintptr, id uint16) uintptr {
 	return ret
 }
 
-// Недостающие proc (если нет в overlay.go)
-var (
-	procSetBkMode      = gdi32.NewProc("SetBkMode")
-	procSetTextColor   = gdi32.NewProc("SetTextColor")
-	procGetWindowLongW = user32.NewProc("GetWindowLongW")
-	procSetWindowLongW = user32.NewProc("SetWindowLongW")
-)
+func onHotkey() {
+	if processing {
+		fmt.Println("Обработка уже идёт, горячая клавиша игнорируется")
+		return
+	}
+	processing = true
+	fmt.Println("Захват области по горячей клавише...")
+	activateCaptureMode()
+}

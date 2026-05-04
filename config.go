@@ -7,14 +7,6 @@ import (
 	"path/filepath"
 )
 
-// Константы модификаторов (скопированы из hotkey.go)
-const (
-	MOD_ALT     = 0x0001
-	MOD_CONTROL = 0x0002
-	MOD_SHIFT   = 0x0004
-	MOD_WIN     = 0x0008
-)
-
 type Config struct {
 	UseHotkey bool   `json:"use_hotkey"`
 	HotkeyMod uint32 `json:"hotkey_mod"`
@@ -69,6 +61,16 @@ func SaveConfig() error {
 }
 
 func ApplyConfig() {
-	fmt.Printf("Настройки применены: UseHotkey=%v, HotkeyMod=%d, HotkeyVk=%d\n",
+	fmt.Printf("Настройки применены: UseHotkey=%v, Mod=%d, Vk=%d\n",
 		currentConfig.UseHotkey, currentConfig.HotkeyMod, currentConfig.HotkeyVk)
+	if hotkeyHwnd != 0 {
+		UnregisterHotkey()
+		if currentConfig.UseHotkey {
+			if err := RegisterHotkey(currentConfig.HotkeyMod, currentConfig.HotkeyVk); err != nil {
+				fmt.Println("Ошибка регистрации горячей клавиши:", err)
+			} else {
+				fmt.Println("Горячая клавиша зарегистрирована")
+			}
+		}
+	}
 }

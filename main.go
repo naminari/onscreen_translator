@@ -236,6 +236,17 @@ func main() {
 	}
 	ApplyConfig()
 
-	// Запускаем UI вместо автоматического оверлея
+	hotkeyHwnd = CreateHotkeyWindow()
+	if hotkeyHwnd == 0 {
+		fmt.Println("Предупреждение: не удалось создать окно для горячей клавиши")
+	} else {
+		if currentConfig.UseHotkey {
+			if err := RegisterHotkey(currentConfig.HotkeyMod, currentConfig.HotkeyVk); err != nil {
+				fmt.Println("Ошибка регистрации горячей клавиши при старте:", err)
+			} else {
+				fmt.Println("Горячая клавиша зарегистрирована")
+			}
+		}
+	}
 	startUI()
 }
