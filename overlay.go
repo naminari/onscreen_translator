@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"image"
 	"syscall"
-	"time"
 	"unsafe"
 )
 
@@ -36,9 +35,18 @@ var (
 	procGetDC                      = user32.NewProc("GetDC")
 	procReleaseDC                  = user32.NewProc("ReleaseDC")
 	procInvertRect                 = user32.NewProc("InvertRect")
+	// Недостающие для цикла сообщений
+	procGetMessageW      = user32.NewProc("GetMessageW")
+	procTranslateMessage = user32.NewProc("TranslateMessage")
+	procDispatchMessageW = user32.NewProc("DispatchMessageW")
 
 	procCreateSolidBrush = gdi32.NewProc("CreateSolidBrush")
 	procDeleteObject     = gdi32.NewProc("DeleteObject")
+
+	// Добавьте в var блок overlay.go:
+	procSendMessageW = user32.NewProc("SendMessageW")
+	procGetDlgItem   = user32.NewProc("GetDlgItem")
+	procEnableWindow = user32.NewProc("EnableWindow")
 )
 
 const (
@@ -62,7 +70,6 @@ const (
 	WM_LBUTTONUP     = 0x0202
 	WM_PAINT         = 0x000F
 	WM_ERASEBKGND    = 0x0014
-	WM_DESTROY       = 0x0002
 	WM_NCHITTEST     = 0x0084
 	WM_MOUSEACTIVATE = 0x0021
 )
@@ -232,6 +239,7 @@ func startScreenOverlay() {
 	procSetForegroundWindow.Call(hwnd)
 	procSetFocus.Call(hwnd)
 	procSetCapture.Call(hwnd)
+	captureModeActive = true
 }
 
 func normalizeRect(r image.Rectangle) image.Rectangle {
@@ -244,12 +252,13 @@ func normalizeRect(r image.Rectangle) image.Rectangle {
 	return r
 }
 
+// processSelection – вызывается в горутине, после завершения перевода сбрасывает captureModeActive и уведомляет UI.
 func processSelection(rect image.Rectangle) {
 	fmt.Printf("\n=== Выделена область: (%d,%d) - (%d,%d) ===\n", rect.Min.X, rect.Min.Y, rect.Max.X, rect.Max.Y)
 	text, err := captureAndOCR(rect.Min.X, rect.Min.Y, rect.Dx(), rect.Dy())
 	if err != nil {
 		fmt.Printf("Ошибка OCR: %v\n", err)
-		activateCaptureMode()
+		onSelectionDone(false)
 		return
 	}
 	fmt.Println("=== Распознанный текст ===")
@@ -258,21 +267,13 @@ func processSelection(rect image.Rectangle) {
 	translated, err := translateNMT(text)
 	if err != nil {
 		fmt.Printf("Ошибка перевода: %v\n", err)
-		activateCaptureMode()
+		onSelectionDone(false)
 		return
 	}
 	fmt.Println("=== Перевод ===")
 	fmt.Println(translated)
 
-	fmt.Println("(Программа будет ждать 3 секунды и снова активирует выделение)")
-	time.Sleep(3 * time.Second)
-	activateCaptureMode()
-}
-
-func activateCaptureMode() {
-	if captureModeActive {
-		return
-	}
-	captureModeActive = true
-	startScreenOverlay()
+	// Показываем результат (можно добавить MessageBox, но пока просто вывод)
+	fmt.Println("Перевод завершён. Можно запускать новый захват.")
+	onSelectionDone(true)
 }

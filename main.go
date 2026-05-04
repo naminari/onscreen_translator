@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-	"unsafe"
 
 	"github.com/disintegration/imaging"
 	"github.com/joho/godotenv"
@@ -216,6 +215,15 @@ func translateText(text string, mainDict, gameDict map[string]string) string {
 	return strings.Join(out, " ")
 }
 
+// Функция activateCaptureMode – запускает оверлей и устанавливает captureModeActive в true
+func activateCaptureMode() {
+	if captureModeActive {
+		return
+	}
+	captureModeActive = true
+	startScreenOverlay()
+}
+
 func main() {
 	runtime.LockOSThread()
 	procSetProcessDPIAware.Call()
@@ -223,28 +231,11 @@ func main() {
 	_ = godotenv.Load()
 	setConsoleUTF8()
 
-	if os.Getenv("TEST_MODE") == "true" {
-		runTestMode()
-		return
+	if err := LoadConfig(); err != nil {
+		fmt.Println("Ошибка загрузки конфига:", err)
 	}
+	ApplyConfig()
 
-	activateCaptureMode()
-
-	var msg struct {
-		hwnd    uintptr
-		message uint32
-		wParam  uintptr
-		lParam  uintptr
-		time    uint32
-		pt      struct{ x, y int32 }
-	}
-
-	for {
-		ret, _, _ := user32.NewProc("GetMessageW").Call(uintptr(unsafe.Pointer(&msg)), 0, 0, 0)
-		if ret == 0 || ret == 0xFFFFFFFF {
-			break
-		}
-		user32.NewProc("TranslateMessage").Call(uintptr(unsafe.Pointer(&msg)))
-		user32.NewProc("DispatchMessageW").Call(uintptr(unsafe.Pointer(&msg)))
-	}
+	// Запускаем UI вместо автоматического оверлея
+	startUI()
 }
