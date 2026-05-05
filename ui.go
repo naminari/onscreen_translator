@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"syscall"
 	"unsafe"
 )
@@ -62,6 +63,7 @@ var (
 	procSetTextColor   = gdi32.NewProc("SetTextColor")
 	procGetWindowLongW = user32.NewProc("GetWindowLongW")
 	procSetWindowLongW = user32.NewProc("SetWindowLongW")
+	procMessageBoxW    = user32.NewProc("MessageBoxW")
 )
 
 func LOWORD(dw uintptr) uint16 { return uint16(dw & 0xFFFF) }
@@ -128,11 +130,11 @@ func createButton(parent uintptr, text string, x, y, w, h int, id uint16) uintpt
 func mainWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	switch msg {
 	case WM_CREATE:
-		// Увеличили размеры окна: ширина 240, высота 180 (раньше 200x150)
-		procSetWindowPos.Call(hwnd, 0, 0, 0, 240, 180, 0x0002|0x0001)
-		createButton(hwnd, "Захват области", 10, 10, 200, 40, IDC_BUTTON_CAPTURE)
-		createButton(hwnd, "Настройки", 10, 60, 200, 40, IDC_BUTTON_SETTINGS)
-		createButton(hwnd, "Выход", 10, 110, 200, 40, IDC_BUTTON_EXIT)
+		// Устанавливаем размер окна
+		procSetWindowPos.Call(hwnd, 0, 0, 0, 260, 220, 0x0002|0x0001)
+		createButton(hwnd, "Захват области", 10, 10, 230, 40, IDC_BUTTON_CAPTURE)
+		createButton(hwnd, "Настройки", 10, 60, 230, 40, IDC_BUTTON_SETTINGS)
+		createButton(hwnd, "Выход", 10, 130, 230, 40, IDC_BUTTON_EXIT)
 		return 0
 
 	case WM_COMMAND:
@@ -147,18 +149,16 @@ func mainWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			activateCaptureMode()
 			return 0
 		case IDC_BUTTON_SETTINGS:
-			if settingsHwnd == 0 {
-				createSettingsWindow(hwnd)
-			} else {
-				// Если окно уже открыто, показываем его
-				procShowWindow.Call(settingsHwnd, 1)
-				procSetForegroundWindow.Call(settingsHwnd)
-			}
+			showSettingsWindow(hwnd)
 			return 0
 		case IDC_BUTTON_EXIT:
-			procDestroyWindow.Call(hwnd)
+			os.Exit(0)
 			return 0
 		}
+		return 0
+
+	case WM_CLOSE:
+		os.Exit(0)
 		return 0
 
 	case WM_DESTROY:
@@ -198,16 +198,14 @@ func initMainWindowClass() {
 	procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
 }
 
-// startUI запускает главное окно
 func startUI() {
 	initMainWindowClass()
-	// Увеличили начальные размеры: 240x180
 	hwnd, _, _ := procCreateWindowExW.Call(
 		0,
 		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr("MainWindowClass"))),
 		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr("Screen Translator"))),
 		WS_OVERLAPPEDWINDOW|WS_VISIBLE,
-		100, 100, 240, 220,
+		100, 100, 260, 220,
 		0, 0, getModuleHandle(), 0,
 	)
 	if hwnd == 0 {
@@ -215,10 +213,6 @@ func startUI() {
 		return
 	}
 	mainHwnd = hwnd
-
-	// Запретить изменение размера (закомментировано, можно раскомментировать)
-	// style := uint32(procGetWindowLongW.Call(hwnd, -16)[0]) // GWL_STYLE
-	// procSetWindowLongW.Call(hwnd, -16, uintptr(style & ^WS_THICKFRAME & ^WS_MAXIMIZEBOX))
 
 	var msg struct {
 		hwnd    uintptr
@@ -355,7 +349,7 @@ func settingsWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 
 	case WM_DESTROY:
 		settingsHwnd = 0
-		// Разблокируем главное окно
+
 		procEnableWindow.Call(mainHwnd, 1)
 		procSetForegroundWindow.Call(mainHwnd)
 		return 0
@@ -527,4 +521,15 @@ func onHotkey() {
 	processing = true
 	fmt.Println("Захват области по горячей клавише...")
 	activateCaptureMode()
+}
+
+func showSettingsWindow(parent uintptr) {
+	msgBox("Настройки", "Окно настроек будет реализовано в следующей версии\n(см. config.go и hotkey.go для примера)")
+}
+
+func msgBox(title, text string) {
+	procMessageBoxW.Call(0,
+		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(text))),
+		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(title))),
+		0)
 }

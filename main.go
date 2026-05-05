@@ -9,6 +9,7 @@ import (
 	"image/png"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -16,7 +17,6 @@ import (
 	"unicode"
 
 	"github.com/disintegration/imaging"
-	"github.com/joho/godotenv"
 	"github.com/kbinani/screenshot"
 )
 
@@ -128,19 +128,6 @@ func captureAndOCR(x, y, w, h int) (string, error) {
 	return ocrImage(img)
 }
 
-func translateNMT(text string) (string, error) {
-	cmd := exec.Command("python", "translator.py")
-	cmd.Stdin = strings.NewReader(text)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = os.Stderr
-	err := cmd.Run()
-	if err != nil {
-		return "", fmt.Errorf("NMT error: %v", err)
-	}
-	return strings.TrimSpace(out.String()), nil
-}
-
 func checkNMTDependencies() error {
 	if err := exec.Command("python", "--version").Run(); err != nil {
 		return fmt.Errorf("python not found")
@@ -228,13 +215,11 @@ func main() {
 	runtime.LockOSThread()
 	procSetProcessDPIAware.Call()
 
-	_ = godotenv.Load()
-	setConsoleUTF8()
-
 	if err := LoadConfig(); err != nil {
-		fmt.Println("Ошибка загрузки конфига:", err)
+		fmt.Println("Ошибка загрузки настроек:", err)
+	} else {
+		ApplyConfig()
 	}
-	ApplyConfig()
 
 	hotkeyHwnd = CreateHotkeyWindow()
 	if hotkeyHwnd == 0 {
@@ -242,11 +227,20 @@ func main() {
 	} else {
 		if currentConfig.UseHotkey {
 			if err := RegisterHotkey(currentConfig.HotkeyMod, currentConfig.HotkeyVk); err != nil {
-				fmt.Println("Ошибка регистрации горячей клавиши при старте:", err)
+				fmt.Println("Ошибка регистрации горячей клавиши:", err)
 			} else {
 				fmt.Println("Горячая клавиша зарегистрирована")
 			}
 		}
 	}
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt)
+	go func() {
+		<-sigChan
+		fmt.Println("Получен сигнал завершения, выход...")
+		os.Exit(0)
+	}()
+
 	startUI()
 }

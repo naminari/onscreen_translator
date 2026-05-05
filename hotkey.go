@@ -15,20 +15,25 @@ const (
 
 var (
 	hotkeyHwnd   uintptr
-	hotkeyID     int32 = 1
+	hotkeyID     = 1
 	hotkeyActive bool
+)
 
-	user32hotkey         = syscall.NewLazyDLL("user32.dll")
-	procRegisterHotKey   = user32hotkey.NewProc("RegisterHotKey")
-	procUnregisterHotKey = user32hotkey.NewProc("UnregisterHotKey")
-	procGetModuleHandleW = syscall.NewLazyDLL("kernel32.dll").NewProc("GetModuleHandleW")
+var (
+	user32hotkey            = syscall.NewLazyDLL("user32.dll")
+	procRegisterHotKey      = user32hotkey.NewProc("RegisterHotKey")
+	procUnregisterHotKey    = user32hotkey.NewProc("UnregisterHotKey")
+	procCreateWindowExW_hk  = user32hotkey.NewProc("CreateWindowExW")
+	procRegisterClassExW_hk = user32hotkey.NewProc("RegisterClassExW")
+	procDefWindowProcW_hk   = user32hotkey.NewProc("DefWindowProcW")
 )
 
 func getModuleHandleHotkey() uintptr {
-	ret, _, _ := procGetModuleHandleW.Call(0)
+	ret, _, _ := syscall.NewLazyDLL("kernel32.dll").NewProc("GetModuleHandleW").Call(0)
 	return ret
 }
 
+// CreateHotkeyWindow создаёт скрытое окно для приёма WM_HOTKEY
 func CreateHotkeyWindow() uintptr {
 	className := syscall.StringToUTF16Ptr("HotkeyMessageWindow")
 	type WNDCLASSEX struct {
@@ -51,8 +56,8 @@ func CreateHotkeyWindow() uintptr {
 		hInstance:     getModuleHandleHotkey(),
 		lpszClassName: className,
 	}
-	procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
-	hwnd, _, _ := procCreateWindowExW.Call(
+	procRegisterClassExW_hk.Call(uintptr(unsafe.Pointer(&wc)))
+	hwnd, _, _ := procCreateWindowExW_hk.Call(
 		0,
 		uintptr(unsafe.Pointer(className)),
 		0,
@@ -63,18 +68,21 @@ func CreateHotkeyWindow() uintptr {
 	return hwnd
 }
 
+// hotkeyWndProc обрабатывает WM_HOTKEY
 func hotkeyWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
-	if msg == 0x0312 { // WM_HOTKEY
+	const WM_HOTKEY = 0x0312
+	if msg == WM_HOTKEY {
 		if wParam == uintptr(hotkeyID) {
 			onHotkey()
 			return 0
 		}
 	}
-	ret, _, _ := procDefWindowProcW.Call(hwnd, uintptr(msg), wParam, lParam)
+	ret, _, _ := procDefWindowProcW_hk.Call(hwnd, uintptr(msg), wParam, lParam)
 	return ret
 }
 
-func RegisterHotkey(modifiers uint32, vk uint32) error {
+// RegisterHotkey регистрирует глобальную горячую клавишу
+func RegisterHotkey(modifiers, vk uint32) error {
 	if hotkeyActive {
 		UnregisterHotkey()
 	}
@@ -86,6 +94,7 @@ func RegisterHotkey(modifiers uint32, vk uint32) error {
 	return nil
 }
 
+// UnregisterHotkey отменяет регистрацию
 func UnregisterHotkey() {
 	if !hotkeyActive {
 		return

@@ -15,14 +15,12 @@ type Config struct {
 
 var currentConfig Config
 
-const configFileName = "translator_config.json"
-
 func configPath() (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "ScreenTranslator", configFileName), nil
+	return filepath.Join(dir, "ScreenTranslator", "config.json"), nil
 }
 
 func LoadConfig() error {
@@ -63,6 +61,7 @@ func SaveConfig() error {
 func ApplyConfig() {
 	fmt.Printf("Настройки применены: UseHotkey=%v, Mod=%d, Vk=%d\n",
 		currentConfig.UseHotkey, currentConfig.HotkeyMod, currentConfig.HotkeyVk)
+	// Перерегистрируем горячую клавишу, если окно уже создано
 	if hotkeyHwnd != 0 {
 		UnregisterHotkey()
 		if currentConfig.UseHotkey {

@@ -13,7 +13,13 @@ for line in sys.stdin:
     text = line.strip()
     if not text:
         continue
+
     inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
     outputs = model.generate(**inputs, max_length=512)
-    print(tokenizer.decode(outputs[0], skip_special_tokens=True))
-    sys.stdout.flush()
+    translation = tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+    try:
+        print(translation)
+        sys.stdout.flush()
+    except OSError:
+        break
