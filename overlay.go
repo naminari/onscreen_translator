@@ -35,18 +35,16 @@ var (
 	procGetDC                      = user32.NewProc("GetDC")
 	procReleaseDC                  = user32.NewProc("ReleaseDC")
 	procInvertRect                 = user32.NewProc("InvertRect")
-	// Недостающие для цикла сообщений
-	procGetMessageW      = user32.NewProc("GetMessageW")
-	procTranslateMessage = user32.NewProc("TranslateMessage")
-	procDispatchMessageW = user32.NewProc("DispatchMessageW")
+	procGetMessageW                = user32.NewProc("GetMessageW")
+	procTranslateMessage           = user32.NewProc("TranslateMessage")
+	procDispatchMessageW           = user32.NewProc("DispatchMessageW")
+	procSendMessageW               = user32.NewProc("SendMessageW")
+	procGetDlgItem                 = user32.NewProc("GetDlgItem")
+	procEnableWindow               = user32.NewProc("EnableWindow")
+	procSetWindowTextW             = user32.NewProc("SetWindowTextW") // для установки текста в окне результата
 
 	procCreateSolidBrush = gdi32.NewProc("CreateSolidBrush")
 	procDeleteObject     = gdi32.NewProc("DeleteObject")
-
-	// Добавьте в var блок overlay.go:
-	procSendMessageW = user32.NewProc("SendMessageW")
-	procGetDlgItem   = user32.NewProc("GetDlgItem")
-	procEnableWindow = user32.NewProc("EnableWindow")
 )
 
 const (
@@ -72,15 +70,22 @@ const (
 	WM_ERASEBKGND    = 0x0014
 	WM_NCHITTEST     = 0x0084
 	WM_MOUSEACTIVATE = 0x0021
+
+	// Стили для окна результата (EDIT)
+	ES_MULTILINE = 0x0004
+	ES_READONLY  = 0x0800
+	WS_VSCROLL   = 0x00200000
+	WS_HSCROLL   = 0x00100000
 )
 
 var (
-	overlayHwnd       uintptr
-	startX, startY    int
-	drawing           bool
-	selectionRect     image.Rectangle
-	captureModeActive bool
-	prevRect          image.Rectangle
+	overlayHwnd         uintptr
+	startX, startY      int
+	drawing             bool
+	selectionRect       image.Rectangle
+	captureModeActive   bool
+	prevRect            image.Rectangle
+	currentResultWindow uintptr = 0 // глобальный дескриптор окна результата
 )
 
 var className = syscall.StringToUTF16Ptr("OverlayWindowClass")
@@ -252,7 +257,24 @@ func normalizeRect(r image.Rectangle) image.Rectangle {
 	return r
 }
 
+func closeResultWindow() {
+	if currentResultWindow != 0 {
+		ret, _, _ := procIsWindow.Call(currentResultWindow)
+		if ret != 0 {
+			procDestroyWindow.Call(currentResultWindow)
+		}
+		currentResultWindow = 0
+	}
+}
+
+func showResultWindow(text string, x, y int) {
+
+	msgBox("Перевод", text)
+}
+
 func processSelection(rect image.Rectangle) {
+	closeResultWindow()
+
 	fmt.Printf("\n=== Выделена область: (%d,%d) - (%d,%d) ===\n", rect.Min.X, rect.Min.Y, rect.Max.X, rect.Max.Y)
 	text, err := captureAndOCR(rect.Min.X, rect.Min.Y, rect.Dx(), rect.Dy())
 	if err != nil {
@@ -271,6 +293,8 @@ func processSelection(rect image.Rectangle) {
 	}
 	fmt.Println("=== Перевод ===")
 	fmt.Println(translated)
+
+	showResultWindow(translated, rect.Max.X, rect.Max.Y)
 
 	fmt.Println("Перевод завершён. Можно запускать новый захват.")
 	onSelectionDone(true)

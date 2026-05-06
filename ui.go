@@ -524,7 +524,11 @@ func onHotkey() {
 }
 
 func showSettingsWindow(parent uintptr) {
-	msgBox("Настройки", "Окно настроек будет реализовано в следующей версии\n(см. config.go и hotkey.go для примера)")
+	if settingsHwnd == 0 {
+		createSettingsWindow(parent)
+	} else {
+		procSetForegroundWindow.Call(settingsHwnd)
+	}
 }
 
 func msgBox(title, text string) {

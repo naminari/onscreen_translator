@@ -108,8 +108,11 @@ func ocrImage(img image.Image) (string, error) {
 	tmp.Close()
 
 	cmd := exec.Command("tesseract", tmp.Name(), "stdout",
-		"-l", "eng+rus", "--psm", "6", "--oem", "3",
-		"-c", "tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzАБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя0123456789 .,!?;:")
+		"-l", "eng+rus",
+		"--psm", "6",
+		"--oem", "3",
+		"-c", "tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzАБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя0123456789 .,!?;:",
+	)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = os.Stderr
