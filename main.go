@@ -224,6 +224,15 @@ func main() {
 		ApplyConfig()
 	}
 
+	fmt.Println("Загрузка модели перевода...")
+	if err := initTranslator(); err != nil {
+		fmt.Printf("Ошибка инициализации переводчика: %v\n", err)
+		msgBox("Ошибка", "Не удалось загрузить модель перевода.\nУбедитесь, что установлен Python и зависимости.")
+		return
+	}
+	fmt.Println("Переводчик готов.")
+	defer closeTranslator()
+
 	hotkeyHwnd = CreateHotkeyWindow()
 	if hotkeyHwnd == 0 {
 		fmt.Println("Предупреждение: не удалось создать окно для горячей клавиши")
