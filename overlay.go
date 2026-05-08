@@ -3,7 +3,11 @@ package main
 import (
 	"fmt"
 	"image"
+	"runtime"
+	"strings"
+	"sync"
 	"syscall"
+	"unicode"
 	"unsafe"
 )
 
@@ -41,7 +45,11 @@ var (
 	procSendMessageW               = user32.NewProc("SendMessageW")
 	procGetDlgItem                 = user32.NewProc("GetDlgItem")
 	procEnableWindow               = user32.NewProc("EnableWindow")
-	procSetWindowTextW             = user32.NewProc("SetWindowTextW") // для установки текста в окне результата
+	procSetWindowTextW             = user32.NewProc("SetWindowTextW")
+	procPostMessageW               = user32.NewProc("PostMessageW")
+	procGetWindowLongPtrW          = user32.NewProc("GetWindowLongPtrW")
+	procSetWindowLongPtrW          = user32.NewProc("SetWindowLongPtrW")
+	procCallWindowProcW            = user32.NewProc("CallWindowProcW")
 
 	procCreateSolidBrush = gdi32.NewProc("CreateSolidBrush")
 	procDeleteObject     = gdi32.NewProc("DeleteObject")
@@ -72,10 +80,25 @@ const (
 	WM_MOUSEACTIVATE = 0x0021
 
 	// Стили для окна результата (EDIT)
-	ES_MULTILINE = 0x0004
-	ES_READONLY  = 0x0800
-	WS_VSCROLL   = 0x00200000
-	WS_HSCROLL   = 0x00100000
+	ES_MULTILINE     = 0x0004
+	ES_READONLY      = 0x0800
+	ES_AUTOVSCROLL   = 0x0040
+	WS_VSCROLL       = 0x00200000
+	WS_HSCROLL       = 0x00100000
+	WS_EX_CLIENTEDGE = 0x00000200
+
+	// Сообщения для подкласса EDIT
+	WM_LBUTTONDBLCLK = 0x0203
+	WM_GETTEXT       = 0x000D
+	WM_GETTEXTLENGTH = 0x000E
+	EM_GETSEL        = 0x00B0
+
+	// SetWindowPos flags
+	SWP_NOZORDER = 0x0004
+	WM_SIZE      = 0x0005
+
+	// SetWindowLongPtr index для замены WndProc
+	GWLP_WNDPROC = ^uintptr(3) // -4
 )
 
 var (
@@ -85,7 +108,17 @@ var (
 	selectionRect       image.Rectangle
 	captureModeActive   bool
 	prevRect            image.Rectangle
-	currentResultWindow uintptr = 0 // глобальный дескриптор окна результата
+	currentResultWindow uintptr = 0
+
+	// окно результата: два EDIT-контрола
+	hwndOrigEdit  uintptr
+	hwndTransEdit uintptr
+
+	// подкласс оригинального EDIT
+	origEditProc            uintptr
+	editSubclassCallbackPtr uintptr
+	editSubclassOnce        sync.Once
+	resultWindowClassOnce   sync.Once
 )
 
 var className = syscall.StringToUTF16Ptr("OverlayWindowClass")
@@ -267,9 +300,170 @@ func closeResultWindow() {
 	}
 }
 
-func showResultWindow(text string, x, y int) {
+// registerResultWindowClass регистрирует класс окна результата (вызывается один раз).
+func registerResultWindowClass() {
+	type WNDCLASSEX struct {
+		cbSize        uint32
+		style         uint32
+		lpfnWndProc   uintptr
+		cbClsExtra    int32
+		cbWndExtra    int32
+		hInstance     uintptr
+		hIcon         uintptr
+		hCursor       uintptr
+		hbrBackground uintptr
+		lpszMenuName  *uint16
+		lpszClassName *uint16
+		hIconSm       uintptr
+	}
+	clsName := syscall.StringToUTF16Ptr("ResultWindowClass")
+	wc := WNDCLASSEX{
+		cbSize:        uint32(unsafe.Sizeof(WNDCLASSEX{})),
+		lpfnWndProc:   syscall.NewCallback(resultWndProc),
+		hInstance:     getModuleHandle(),
+		hbrBackground: 6, // COLOR_WINDOW + 1
+		lpszClassName: clsName,
+	}
+	procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
+}
 
-	msgBox("Перевод", text)
+func resultWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
+	switch msg {
+	case WM_CREATE:
+		hInst := getModuleHandle()
+		editStyle := uintptr(WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_READONLY | WS_VSCROLL | ES_AUTOVSCROLL)
+		hwndOrigEdit, _, _ = procCreateWindowExW.Call(
+			WS_EX_CLIENTEDGE,
+			uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr("EDIT"))),
+			0, editStyle,
+			5, 5, 490, 185,
+			hwnd, 0, hInst, 0,
+		)
+		hwndTransEdit, _, _ = procCreateWindowExW.Call(
+			WS_EX_CLIENTEDGE,
+			uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr("EDIT"))),
+			0, editStyle,
+			5, 205, 490, 185,
+			hwnd, 0, hInst, 0,
+		)
+		if hwndOrigEdit != 0 {
+			editSubclassOnce.Do(func() {
+				editSubclassCallbackPtr = syscall.NewCallback(editSubclassProc)
+			})
+			origEditProc, _, _ = procSetWindowLongPtrW.Call(
+				hwndOrigEdit, GWLP_WNDPROC, editSubclassCallbackPtr,
+			)
+		}
+		return 0
+
+	case WM_SIZE:
+		w := int(lParam & 0xFFFF)
+		h := int((lParam >> 16) & 0xFFFF)
+		half := (h - 15) / 2
+		if half < 30 {
+			half = 30
+		}
+		procSetWindowPos.Call(hwndOrigEdit, 0, 5, 5,
+			uintptr(w-10), uintptr(half), SWP_NOZORDER)
+		procSetWindowPos.Call(hwndTransEdit, 0, 5, uintptr(half+10),
+			uintptr(w-10), uintptr(half), SWP_NOZORDER)
+		return 0
+
+	case WM_CLOSE:
+		procDestroyWindow.Call(hwnd)
+		return 0
+
+	case WM_DESTROY:
+		if origEditProc != 0 && hwndOrigEdit != 0 {
+			procSetWindowLongPtrW.Call(hwndOrigEdit, GWLP_WNDPROC, origEditProc)
+			origEditProc = 0
+		}
+		hwndOrigEdit = 0
+		hwndTransEdit = 0
+		currentResultWindow = 0
+		procPostQuitMessage.Call(0)
+		return 0
+	}
+	ret, _, _ := procDefWindowProcW.Call(hwnd, uintptr(msg), wParam, lParam)
+	return ret
+}
+
+func editSubclassProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
+	if msg == WM_LBUTTONDBLCLK {
+		procCallWindowProcW.Call(origEditProc, hwnd, uintptr(msg), wParam, lParam)
+
+		var selStart, selEnd uint32
+		procSendMessageW.Call(hwnd, EM_GETSEL,
+			uintptr(unsafe.Pointer(&selStart)),
+			uintptr(unsafe.Pointer(&selEnd)))
+
+		if selEnd > selStart {
+			textLen, _, _ := procSendMessageW.Call(hwnd, WM_GETTEXTLENGTH, 0, 0)
+			if textLen > 0 && selEnd <= uint32(textLen) {
+				buf := make([]uint16, textLen+1)
+				procSendMessageW.Call(hwnd, WM_GETTEXT,
+					textLen+1, uintptr(unsafe.Pointer(&buf[0])))
+				wordU16 := make([]uint16, selEnd-selStart+1)
+				copy(wordU16, buf[selStart:selEnd])
+				word := syscall.UTF16ToString(wordU16)
+				word = strings.ToLower(strings.TrimFunc(word, func(r rune) bool {
+					return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+				}))
+				if word != "" {
+					lookupAndShowWord(word)
+				}
+			}
+		}
+		return 0
+	}
+	ret, _, _ := procCallWindowProcW.Call(origEditProc, hwnd, uintptr(msg), wParam, lParam)
+	return ret
+}
+
+func showResultWindow(originalText, translatedText string, x, y int) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	resultWindowClassOnce.Do(registerResultWindowClass)
+
+	hwnd, _, _ := procCreateWindowExW.Call(
+		WS_EX_TOPMOST,
+		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr("ResultWindowClass"))),
+		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr("Результат перевода"))),
+		WS_OVERLAPPEDWINDOW|WS_VISIBLE,
+		uintptr(x), uintptr(y), 520, 430,
+		0, 0, getModuleHandle(), 0,
+	)
+	if hwnd == 0 {
+		return
+	}
+	currentResultWindow = hwnd
+
+	if hwndOrigEdit != 0 {
+		procSetWindowTextW.Call(hwndOrigEdit,
+			uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(originalText))))
+	}
+	if hwndTransEdit != 0 {
+		procSetWindowTextW.Call(hwndTransEdit,
+			uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(translatedText))))
+	}
+
+	var msg struct {
+		hwnd    uintptr
+		message uint32
+		wParam  uintptr
+		lParam  uintptr
+		time    uint32
+		pt      struct{ x, y int32 }
+	}
+	for {
+		ret, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&msg)), 0, 0, 0)
+		if ret == 0 || ret == 0xFFFFFFFF {
+			break
+		}
+		procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
+		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&msg)))
+	}
 }
 
 func processSelection(rect image.Rectangle) {
@@ -294,7 +488,7 @@ func processSelection(rect image.Rectangle) {
 	fmt.Println("=== Перевод ===")
 	fmt.Println(translated)
 
-	showResultWindow(translated, rect.Max.X, rect.Max.Y)
+	showResultWindow(text, translated, rect.Max.X, rect.Max.Y)
 
 	fmt.Println("Перевод завершён. Можно запускать новый захват.")
 	onSelectionDone(true)

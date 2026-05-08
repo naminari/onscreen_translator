@@ -233,6 +233,13 @@ func main() {
 	fmt.Println("Переводчик готов.")
 	defer closeTranslator()
 
+	if d, err := loadDictionaryMap("dict/en-ru.txt"); err != nil {
+		fmt.Printf("Словарь не загружен: %v\n", err)
+	} else {
+		globalDict = d
+		fmt.Printf("Словарь загружен: %d слов\n", len(d))
+	}
+
 	hotkeyHwnd = CreateHotkeyWindow()
 	if hotkeyHwnd == 0 {
 		fmt.Println("Предупреждение: не удалось создать окно для горячей клавиши")
